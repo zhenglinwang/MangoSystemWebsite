@@ -1,0 +1,301 @@
+library(leaflet)
+library(sp)
+library(ggplot2)
+library(shiny)
+library(SDMTools)
+
+
+#setwd("~/ownCloud/shinyr/MangoApp/Kerry Mango/Mango Project - DS/shinyr/MangoApp/DM/MangoData")
+setwd("/srv/shiny-server/MangoApp/DM")
+
+
+a <- 0
+files<-list.files()
+for(file in files){
+  a<- a+1
+  fil <- read.csv(file,
+                  header=FALSE,
+                  row.names=NULL,
+                  skip=1,
+                  colClasses=c('NULL','character','NULL','NULL','numeric','NULL','NULL','NULL','NULL','NULL','character','character','NULL','NULL'),
+                  col.names=c("","Time","","","DryMatter","","","","","","Lat","Long","",""))
+  fil <- fil[-which(fil==""),]
+  if(a==1){filly <- fil}else{filly <- rbind(filly,fil)}
+  
+}
+
+filly2 <- substr(filly$Time,2,11)
+filly["Date"] <- filly2
+filly$Date <- as.Date(filly$Date,"%d/%m/%Y")
+filly["Week"] <- strftime(filly$Date,format="%W")
+filly <- filly[-which(filly$Lat==0),]
+
+hunk <- filly   
+
+
+
+
+#setwd("~/Dave_Work/shinyr/MangoApp/Kerry Mango/Mango Project - DS/shinyr/MangoApp/Paddocks")
+#setwd("~/ownCloud/shinyr/MangoApp/Kerry Mango/Mango Project - DS/shinyr/MangoApp/Paddocks1")
+setwd("/srv/shiny-server/MangoApp/Paddocks")
+
+filenames<-list.files()
+paddocknames <- substr(filenames,4,5)
+filenumbers<-seq(filenames)
+b <- 0
+for(filenumber in filenumbers){ b <- b+1
+
+paddock1 <- as.matrix(read.csv(filenames[filenumber],
+                               header=FALSE), colnames = "long", "lat")
+
+#***********************
+#list of paddock names
+
+tin <- ifelse(nchar(filenames[filenumber])<10, substr(filenames[filenumber], 1, nchar(filenames[filenumber])-4),  substr(filenames[filenumber], 6, nchar(filenames[filenumber])-4))
+if (b==1) {blkname<-tin}else{blkname <- c(blkname,tin)}
+
+#************************
+
+trigger <- hunk[c(4,3)]
+tent<- pnt.in.poly(trigger,paddock1)
+
+hunk["trees"] <- tent$pip
+
+hunk["paddock"] <- as.numeric(paddocknames[b])*hunk$trees
+
+hunk$trees <- hunk$trees*hunk$DryMatter
+
+treesinpad <- hunk[-which(hunk$paddock==0),]
+
+AvDM <- sum(hunk$trees)/sum(tent$pip)
+if(is.nan(AvDM)){AvDM<-0}else{AvDM<-AvDM}
+
+p1 = Polygon(paddock1)
+ps1 = Polygons(list(p1),paddocknames[filenumber])
+if (filenumber == 1) {sp <- c(ps1)
+paddAv <- AvDM
+paddtrees <- treesinpad
+} else {sp <- c(sp,ps1)
+paddAv <- c(paddAv,AvDM)
+paddtrees <- rbind(paddtrees,treesinpad)
+}
+hunk$trees <- NULL
+hunk$paddock <- NULL
+}
+
+
+
+
+shinyServer(
+  function(input, output) {
+    
+
+    
+    paddtrees <<- paddtrees
+    
+    sps <<- SpatialPolygons(sp)
+    
+    
+    
+
+    
+    
+    output$MangoMap <- renderLeaflet({
+    
+     
+    leaflet(sps) %>% setView(lng = 131.1828, lat = -12.7386, zoom = 15) %>% addTiles() %>%
+      addProviderTiles("Esri.WorldImagery") %>%
+      addPolygons(fillOpacity = 0.3,smoothFactor = 0.2, 
+                  color = "green")
+      
+  
+        
+      })
+      
+    observe({ 
+      
+      output$DateRange <- renderText({
+        # make sure end date later than start date
+        validate(
+          need(input$dateRange[2] > input$dateRange[1], "The date selection results in an end date earlier than the start date, please change your date selection."
+              
+          )
+        )})
+     
+      start <- input$dateRange[1]
+      end <- input$dateRange[2]
+      pts <<- paddtrees[which(paddtrees$Date>start&paddtrees$Date<end),]
+      
+      pts$DryMatter <- round(pts$DryMatter, digits=2)
+      
+      if(start>=end||input$treechoice==2||nrow(pts)==0){leafletProxy("MangoMap") %>% clearMarkers()
+        }else{
+        
+        
+        
+        leafletProxy("MangoMap", data=pts)%>%  
+          clearMarkers()%>%
+          addCircleMarkers(lng = pts$Long, lat = pts$Lat, color = ifelse(pts$DryMatter>16,"blue","lawngreen"), radius = 5, popup = paste0("Dry Matter ", pts$DryMatter, "%"))
+      }})
+    
+    
+    
+    observe({ 
+      
+      start <- input$dateRange[1]
+      end <- input$dateRange[2]
+      
+      start1 <- as.character(format(input$dateRange[1], format="%B %d %Y"))
+      end1 <- as.character(format(input$dateRange[2], format="%B %d %Y"))
+      quip <- paddtrees[which(paddtrees$Date>start&paddtrees$Date<end),]
+      
+      
+      if(start>=end||input$DMchoice==2||nrow(quip)==0){leafletProxy("MangoMap", data=sps) %>%
+          setView(lng=mean(as.numeric(quip$Long)),lat=mean(as.numeric(quip$Lat)),zoom=14)%>%
+          clearShapes()%>%
+          addPolygons(fillOpacity = 0.3,smoothFactor = 0.2, color = "green")
+                                                                                   
+      }else{
+       
+        quippy <- as.numeric(paddocknames)  #unique(paddtrees$paddock)
+        d <- 0
+        for(i in 1:length(quippy)){ d <- d+1
+          bugy <- quip[which(quip$paddock==quippy[d]),]
+          if(nrow(bugy)==0){tye <- 0}else{
+          tye <- mean(bugy$trees)}
+          #if(is.nan(tye)){tye<-0}else{tye<-tye}
+          nipy <- nrow(bugy)
+          if (d == 1) {
+          tyeAv <- tye
+          numtrees <- nipy
+          } else {
+          tyeAv <- c(tyeAv,tye)
+          numtrees <- c(numtrees,nipy)}
+        }
+        blippy <- tyeAv
+        tyeAv <- round(tyeAv, digits=2)
+        
+        tyeAv <- as.character(tyeAv)
+        
+        pal <- colorNumeric(
+          palette = c("tan","chocolate"),
+          domain = c(14,16))
+        
+       
+        
+        leafletProxy("MangoMap", data=sps)%>%  
+          clearShapes()%>%
+          addPolygons(fillOpacity = 0.3,smoothFactor = 0.2, popup = ifelse(blippy==0, paste0("There were no trees sampled in ", blkname,
+                                                                                             " between ", start1," and ", end1), 
+                                                                           paste0("Average dry matter in ", blkname, " between ", start1," and ", end1, 
+" was ", tyeAv, "% based on sampling ",numtrees," trees.")), 
+                                  color = ifelse(blippy>15.5,"red", ifelse(blippy==0, "green", pal(blippy))))
+      }})
+    
+    observe({
+      a <- which(blkname==input$e0)
+      start <- input$dateRange[1]
+      end <- input$dateRange[2]
+      output$Name <- renderText(paste0("Overview of ",input$e0," block"))
+      
+      
+      
+      start1 <- as.character(format(input$dateRange[1], format="%B %d %Y"))
+      end1 <- as.character(format(input$dateRange[2], format="%B %d %Y"))
+      
+      output$Head <- renderText(paste0("Distribution of dry matter across ", input$e0, " between ",start1, " and ", end1))
+      
+      grap <- paddtrees[which(paddtrees$Date>start&paddtrees$Date<end),]
+      grap <- grap[which(grap$paddock==a),]
+      grap$DryMatter<- round(grap$DryMatter, digits=2)
+      
+      yup <- round(mean(grap$DryMatter), digits=2)
+      nump <- nrow(grap)
+      if(input$treechoice==2){
+      leafletProxy("MangoMap", data=grap)%>% 
+        clearMarkers()%>%
+        setView(lng = mean(as.numeric(grap$Long)), mean(as.numeric(grap$Lat)), zoom=16)%>%
+        addMarkers(mean(as.numeric(grap$Long)), mean(as.numeric(grap$Lat)), popup = ifelse(nump==0,paste0("There were no trees sampled in ", input$e0,
+             " between ", start1," and ", end1), 
+      paste0("Average dry matter in ", input$e0, " between ", start1," and ", end1, 
+             " was ", yup, "% based on sampling ",nump," trees.")))}else{}
+      
+      if(nrow(grap)==0){output$paddrymatter <- renderPlot({
+        
+        
+        plot(8,15,col="white",xlab= "Dry Matter", ylab = "Number of Trees")
+        text(8,15,"Warning No Tree Data Recorded For This Period")
+      })
+      
+      output$treenum <- renderValueBox({
+        valueBox(
+          "Warning", "Zero Trees",
+            icon = icon("thumbs-down", lib = "glyphicon"),
+          color = "red"
+        )
+      })
+      
+      
+      output$dayBox <- renderValueBox({
+        valueBox(
+          paste0(end-start), "Sample Days", icon = icon("list"),
+          color = "orange"
+        )
+      })
+      
+      output$meanBox <- renderValueBox({
+        valueBox(
+          "Warning", "No Average Dry Matter", icon = icon("thumbs-down", lib = "glyphicon"), color = "red"
+        )
+      })
+      
+      }else{
+      
+      output$paddrymatter <- renderPlot({
+        
+       
+        hist(grap$DryMatter, col="green", main=NULL, xlab= "Dry Matter", ylab = "Number of Trees")
+      })
+        
+        output$treenum <- renderValueBox({
+          valueBox(
+            paste0(nrow(grap)), "Trees", if((nrow(grap)>20)){ 
+              icon = icon("thumbs-up", lib = "glyphicon")}else
+              {icon = icon("thumbs-down", lib = "glyphicon")},
+            if(nrow(grap>20)){ color = "green"} else {colour = "red"}
+          )
+        })
+        
+        
+        output$dayBox <- renderValueBox({
+          valueBox(
+            paste0(end-start), "Sample Days", icon = icon("list"),
+            color = "orange"
+          )
+        })
+        
+        output$meanBox <- renderValueBox({
+          valueBox(
+            paste0(round(mean(grap$DryMatter),2),"%"), "Average Dry Matter", if((mean(grap$DryMatter)>15.5)){ 
+              icon = icon("thumbs-up", lib = "glyphicon")}else
+              {icon = icon("thumbs-down", lib = "glyphicon")},
+            if((mean(grap$DryMatter)>15.5)){ color = "green"} else {colour = "red"}
+          )
+        })
+        
+      
+        
+        
+      
+      }      
+    })
+    
+      
+    })
+      
+       
+     
+    
+    
+  
+#leaflet(sps) + geom_point(aes(x=longitude, y=latitude, show_guide = TRUE, colour=Median), data=DM, alpha=.5, na.rm =T) + scale_color_gradient(low="blue", high="red")
